@@ -1,5 +1,7 @@
 package com.example.navigation.domain.models
 
+import com.example.navigation.utils.LocationUtils
+
 data class RouteMatch(
     val streetName: String,
     val nextManeuver: String,
@@ -10,10 +12,7 @@ data class RouteMatch(
     val matchedBearing: Float
 ) {
     val distanceFormatted: String
-        get() = when {
-            distanceToNext >= 1000 -> String.format("%.1f km", distanceToNext / 1000.0)
-            else -> "$distanceToNext m"
-        }
+        get() = LocationUtils.formatDistance(distanceToNext)
 
     val location: Location
         get() = Location(

@@ -2,6 +2,7 @@ package com.example.navigation
 
 import com.example.navigation.domain.models.RouteMatch
 import com.example.navigation.domain.models.Route
+import com.example.navigation.domain.models.Location
 
 /**
  * Bridge class between Kotlin and C++ native navigation engine.
@@ -45,4 +46,24 @@ class NavigationEngine {
      * @return True if switch was successful.
      */
     external fun switchToRoute(routeId: String): Boolean
+
+    /**
+     * Gets a detailed path between two points that follows the road network.
+     * This method uses the native road graph to generate a path that follows
+     * actual roads, ensuring realistic navigation simulation.
+     *
+     * @param startLat Starting latitude
+     * @param startLon Starting longitude
+     * @param endLat Ending latitude
+     * @param endLon Ending longitude
+     * @param maxSegments Maximum number of segments to return (0 for unlimited)
+     * @return List of locations representing a path that follows roads
+     */
+    external fun getDetailedPath(
+        startLat: Double,
+        startLon: Double,
+        endLat: Double,
+        endLon: Double,
+        maxSegments: Int = 0
+    ): List<Location>
 }

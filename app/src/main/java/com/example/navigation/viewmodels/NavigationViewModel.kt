@@ -8,6 +8,8 @@ import com.example.navigation.domain.models.Location
 import com.example.navigation.domain.models.Route
 import com.example.navigation.domain.models.RouteMatch
 import com.example.navigation.domain.repository.NavigationRepository
+import com.example.navigation.utils.FormatUtils
+import com.example.navigation.utils.NavigationSimulator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,25 +19,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.inject.Inject
 
 private const val TAG = "NavigationViewModel"
-
-data class NavigationState(
-    val isNavigating: Boolean = false,
-    val hasLocationPermission: Boolean = false,
-    val currentLocation: Location? = null,
-    val destination: Location? = null,
-    val currentRoute: Route? = null,
-    val alternativeRoutes: List<Route> = emptyList(),
-    val currentRouteMatch: RouteMatch? = null,
-    val isLocationTracking: Boolean = false,
-    val errorMessage: String? = null,
-    val isLoading: Boolean = false
-)
 
 @HiltViewModel
 class NavigationViewModel @Inject constructor(
@@ -47,6 +33,98 @@ class NavigationViewModel @Inject constructor(
     val state: StateFlow<NavigationState> = _state.asStateFlow()
 
     private var locationJob: Job? = null
+
+    // Demo mode state
+    private val _isDemoMode = MutableStateFlow(false)
+    val isDemoMode: StateFlow<Boolean> = _isDemoMode.asStateFlow()
+
+    // Navigation simulator
+    private val navigationSimulator = NavigationSimulator(
+        navigationEngine = navigationEngine,
+        coroutineScope = viewModelScope
+    )
+
+    // Implement SimulationCallback
+    private val simulationCallback = object : NavigationSimulator.SimulationCallback {
+        override fun onLocationUpdated(location: Location) {
+            _state.update { it.copy(currentLocation = location) }
+        }
+
+        override fun onRouteMatchUpdated(routeMatch: RouteMatch) {
+            _state.update { it.copy(currentRouteMatch = routeMatch) }
+        }
+
+        override fun onSimulationCompleted() {
+            _state.update { it.copy(errorMessage = "Destination reached") }
+            viewModelScope.launch {
+                delay(3000)
+                stopSimulation()
+            }
+        }
+
+        override fun onSimulationError(message: String) {
+            _state.update { it.copy(errorMessage = message) }
+            stopSimulation()
+        }
+
+        override fun getEstimatedArrivalTime(route: Route?): String {
+            return FormatUtils.calculateEstimatedArrival(route)
+        }
+    }
+
+    // Start simulation
+    fun startSimulation() {
+        locationJob?.cancel()
+
+        Log.d(TAG, "startSimulation() called, route exists: ${_state.value.currentRoute != null}")
+
+        val currentRoute = _state.value.currentRoute
+        val currentLocation = _state.value.currentLocation
+        val destination = _state.value.destination
+
+        // Set navigation mode to true so the UI shows navigation controls
+        _state.update { it.copy(
+            isNavigating = true,
+            errorMessage = null
+        )}
+
+        // Start simulation
+        val success = navigationSimulator.startSimulation(
+            route = currentRoute,
+            currentLocation = currentLocation,
+            destination = destination,
+            callback = simulationCallback
+        )
+
+        if (success) {
+            _isDemoMode.value = true
+        } else {
+            _state.update { it.copy(
+                isNavigating = false,
+                errorMessage = "Could not start simulation - missing route or location"
+            )}
+        }
+    }
+
+    // Stop simulation
+    fun stopSimulation() {
+        _isDemoMode.value = false
+        navigationSimulator.stopSimulation()
+
+        // Reset the navigation state
+        _state.update { it.copy(
+            isNavigating = false,
+            currentRouteMatch = null
+        )}
+    }
+
+    // Called when camera has been updated
+    fun onCameraUpdated() {
+        _state.update { it.copy(
+            shouldUpdateCamera = false,
+            zoomToRoute = false
+        )}
+    }
 
     fun onLocationPermissionGranted(hasPermission: Boolean) {
         _state.update { it.copy(
@@ -94,6 +172,11 @@ class NavigationViewModel @Inject constructor(
     }
 
     private fun processNewLocation(location: Location) {
+        // Don't process real location updates during simulation
+        if (_isDemoMode.value) {
+            return
+        }
+
         val currentLocation = _state.value.currentLocation
         if (currentLocation != null &&
             currentLocation.latitude == location.latitude &&
@@ -102,7 +185,13 @@ class NavigationViewModel @Inject constructor(
         }
 
         try {
-            _state.update { it.copy(currentLocation = location) }
+            // Only update camera in non-demo mode, in demo mode the simulation handles camera updates
+            val shouldUpdateCamera = !_isDemoMode.value
+
+            _state.update { it.copy(
+                currentLocation = location,
+                shouldUpdateCamera = shouldUpdateCamera
+            )}
 
             val routeMatch = navigationEngine.updateLocation(
                 location.latitude,
@@ -116,7 +205,7 @@ class NavigationViewModel @Inject constructor(
                 _state.update { it.copy(
                     currentRouteMatch = routeMatch.copy(
                         estimatedTimeOfArrival = if (routeMatch.estimatedTimeOfArrival.isBlank())
-                            calculateEstimatedArrival(_state.value.currentRoute)
+                            FormatUtils.calculateEstimatedArrival(_state.value.currentRoute)
                         else
                             routeMatch.estimatedTimeOfArrival
                     )
@@ -217,7 +306,8 @@ class NavigationViewModel @Inject constructor(
         if (_state.value.currentRoute != null) {
             _state.update { it.copy(
                 isNavigating = true,
-                errorMessage = null
+                errorMessage = null,
+                zoomToRoute = true
             )}
             startLocationUpdates()
         } else {
@@ -231,7 +321,8 @@ class NavigationViewModel @Inject constructor(
         _state.update { it.copy(
             isNavigating = false,
             currentRouteMatch = null,
-            errorMessage = null
+            errorMessage = null,
+            zoomToRoute = false
         )}
         startLocationUpdates()
     }
@@ -240,16 +331,46 @@ class NavigationViewModel @Inject constructor(
         _state.update { it.copy(errorMessage = null) }
     }
 
-    private fun calculateEstimatedArrival(route: Route?): String {
-        if (route == null) return ""
+    /**
+     * Clears the current destination and all route information.
+     * This effectively resets the navigation state.
+     */
+    fun clearDestination() {
+        viewModelScope.launch {
+            try {
+                _state.update { it.copy(
+                    destination = null,
+                    currentRoute = null,
+                    alternativeRoutes = emptyList(),
+                    currentRouteMatch = null,
+                    isNavigating = false,
+                    errorMessage = null,
+                    zoomToRoute = false,
+                    isLoading = false
+                )}
 
-        val formatter = SimpleDateFormat("h:mm a", Locale.getDefault())
-        val arrivalTime = Date(System.currentTimeMillis() + route.durationSeconds * 1000L)
-        return formatter.format(arrivalTime)
+                // If we're in demo mode, make sure to stop simulation first
+                if (_isDemoMode.value) {
+                    stopSimulation()
+                }
+
+                // Restart location updates to ensure tracking continues
+                locationJob?.cancel()
+                startLocationUpdates()
+
+                Log.d(TAG, "Navigation state reset")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error clearing destination", e)
+                _state.update { it.copy(
+                    errorMessage = "Error resetting: ${e.message}"
+                )}
+            }
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
         locationJob?.cancel()
+        navigationSimulator.stopSimulation()
     }
 }

@@ -1,8 +1,4 @@
 #include "navigation_engine.h"
-#include "route_matcher.h"
-#include "location_filter.h"
-#include "road_graph.h"
-#include "routing_engine.h"
 #include <android/log.h>
 #include <jni.h>
 #include <memory>
@@ -10,23 +6,41 @@
 #include <vector>
 #include <chrono>
 #include <string>
+#include <cmath>
+#include <algorithm> // for std::clamp (C++17+)
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #define LOG_TAG "NavigationEngine"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Singleton instance
+// Global instance for JNI usage
 static std::unique_ptr<NavigationEngine> gNavigationEngine;
+
+double NavigationEngine::haversineDistance(double lat1, double lon1, double lat2, double lon2) {
+    constexpr double R = 6371000.0; // Earth radius in meters
+    double phi1 = lat1 * M_PI / 180.0;
+    double phi2 = lat2 * M_PI / 180.0;
+    double dPhi = (lat2 - lat1) * M_PI / 180.0;
+    double dLambda = (lon2 - lon1) * M_PI / 180.0;
+
+    double a = std::sin(dPhi/2) * std::sin(dPhi/2) +
+               std::cos(phi1)  * std::cos(phi2) *
+               std::sin(dLambda/2) * std::sin(dLambda/2);
+
+    return R * 2.0 * std::atan2(std::sqrt(a), std::sqrt(1 - a));
+}
 
 NavigationEngine::NavigationEngine() {
     LOGI("Creating NavigationEngine");
-
     try {
-        roadGraph = std::make_unique<RoadGraph>();
-        routingEngine = std::make_unique<RoutingEngine>(roadGraph.get());
-        routeMatcher = std::make_unique<RouteMatcher>(roadGraph.get());
+        roadGraph      = std::make_unique<RoadGraph>();
+        routingEngine  = std::make_unique<RoutingEngine>(roadGraph.get());
+        routeMatcher   = std::make_unique<RouteMatcher>(roadGraph.get());
         locationFilter = std::make_unique<LocationFilter>();
-
         LOGI("NavigationEngine created successfully");
     } catch (const std::exception& e) {
         LOGE("Error creating NavigationEngine: %s", e.what());
@@ -40,74 +54,65 @@ NavigationEngine::~NavigationEngine() {
 
 RouteMatch NavigationEngine::updateLocation(double lat, double lon, float bearing,
                                             float speed, float accuracy) {
-    // Filter raw location data
-    Location rawLocation{lat, lon, bearing, speed, accuracy};
+    Location rawLocation{ lat, lon, bearing, speed, accuracy };
     LOGI("Processing location: lat=%.6f, lon=%.6f, bearing=%.1f, speed=%.1f, accuracy=%.1f",
          lat, lon, bearing, speed, accuracy);
 
-    // Apply Kalman filtering
+    // Filter raw location data
     Location filtered = locationFilter->process(rawLocation);
-
-    // Update current location
     currentLocation = filtered;
 
-    // If we have a destination but no routes yet, calculate routes now
+    // If there's a destination and no routes yet, compute routes
     if (destinationLocation.has_value() && alternativeRoutes.empty()) {
-        LOGI("We have current location now, calculating routes to saved destination");
+        LOGI("Calculating routes to saved destination");
         alternativeRoutes = routingEngine->calculateRoutes(
                 currentLocation.value(),
                 destinationLocation.value()
         );
-
         if (!alternativeRoutes.empty()) {
             LOGI("Calculated %zu alternative routes", alternativeRoutes.size());
-            // Set the first route as current
             currentRoute = alternativeRoutes[0];
             routeMatcher->setRoute(alternativeRoutes[0]);
         }
     }
 
-    // Match location to route if we have one
+    // If we have a route, do route matching
     if (currentRoute) {
         return routeMatcher->match(filtered);
     }
 
-    // Return empty match if no route is active
-    RouteMatch emptyMatch;
-    emptyMatch.streetName = "No active route";
-    emptyMatch.nextManeuver = "Set a destination";
-    emptyMatch.distanceToNext = 0;
-    emptyMatch.estimatedTimeOfArrival = "";
-    emptyMatch.matchedLatitude = filtered.latitude;
-    emptyMatch.matchedLongitude = filtered.longitude;
-    emptyMatch.matchedBearing = filtered.bearing;
-    return emptyMatch;
+    // Otherwise, return placeholder
+    return RouteMatch{
+            .streetName             = "No active route",
+            .nextManeuver           = "Set a destination",
+            .distanceToNext         = 0,
+            .estimatedTimeOfArrival = "",
+            .matchedLatitude        = filtered.latitude,
+            .matchedLongitude       = filtered.longitude,
+            .matchedBearing         = filtered.bearing
+    };
 }
 
 bool NavigationEngine::setDestination(double lat, double lon) {
     LOGI("Setting destination: lat=%.6f, lon=%.6f", lat, lon);
+    destinationLocation = Location{ lat, lon, 0.0f, 0.0f, 0.0f };
 
-    // Store the destination even if we don't have current location yet
-    destinationLocation = Location{lat, lon};
-
-    // If we don't have current location, just store the destination and return success
     if (!currentLocation.has_value()) {
-        LOGI("Destination set, but waiting for current location before calculating routes");
+        LOGI("Waiting for current location before route calculation");
         return true;
     }
 
-    // Calculate routes
     alternativeRoutes = routingEngine->calculateRoutes(
             currentLocation.value(),
             destinationLocation.value()
     );
 
     if (alternativeRoutes.empty()) {
-        LOGE("Failed to calculate any routes");
+        LOGE("Failed to calculate routes");
         return false;
     }
 
-    LOGI("Calculated %zu alternative routes", alternativeRoutes.size());
+    LOGI("Found %zu alternative routes", alternativeRoutes.size());
     return true;
 }
 
@@ -116,36 +121,119 @@ std::vector<Route> NavigationEngine::getAlternativeRoutes() const {
 }
 
 bool NavigationEngine::switchToRoute(const std::string& routeId) {
-    LOGI("Switching to route %s", routeId.c_str());
-
     for (const auto& route : alternativeRoutes) {
         if (route.id == routeId) {
             currentRoute = route;
             routeMatcher->setRoute(route);
-            LOGI("Route switched successfully");
+            LOGI("Switched to route %s", routeId.c_str());
             return true;
         }
     }
-
     LOGE("Route %s not found", routeId.c_str());
     return false;
 }
 
-// Helper function to convert C++ structs to Java objects
+void NavigationEngine::calculateBearingAndSpeed(std::vector<Location>& path) {
+    if (path.size() < 2) return;
+
+    for (size_t i = 0; i < path.size() - 1; i++) {
+        double dLon = (path[i + 1].longitude - path[i].longitude) * M_PI / 180.0;
+        double lat1 = path[i].latitude * M_PI / 180.0;
+        double lat2 = path[i + 1].latitude * M_PI / 180.0;
+
+        double y = std::sin(dLon) * std::cos(lat2);
+        double x = std::cos(lat1) * std::sin(lat2)
+                   - std::sin(lat1) * std::cos(lat2) * std::cos(dLon);
+
+        float bearing = static_cast<float>(std::atan2(y, x) * 180.0 / M_PI);
+        if (bearing < 0.0f) bearing += 360.0f;
+        path[i].bearing = bearing;
+
+        // Estimate speed by naive distance / 60sec
+        double distance = haversineDistance(
+                path[i].latitude, path[i].longitude,
+                path[i + 1].latitude, path[i + 1].longitude);
+        float rawSpeed = static_cast<float>(distance / 60.0);
+
+        // clamp speed to 5..20
+        path[i].speed = std::clamp(rawSpeed, 5.0f, 20.0f);
+    }
+
+    // Last point
+    if (path.size() > 1) {
+        path.back().bearing = path[path.size() - 2].bearing;
+        path.back().speed   = 0.0f;
+    }
+}
+
+std::vector<Location> NavigationEngine::getDetailedPath(
+        double startLat, double startLon,
+        double endLat, double endLon,
+        int maxSegments) {
+
+    std::vector<Location> result;
+    LOGI("Generating path from (%.6f,%.6f) to (%.6f,%.6f)",
+         startLat, startLon, endLat, endLon);
+
+    // Use RoutingEngine to calculate a route
+    Location startLocation{ startLat, startLon, 0.0f, 0.0f }; // Default bearing and speed
+    Location endLocation{ endLat, endLon, 0.0f, 0.0f };       // Default bearing and speed
+
+    // Calculate routes using RoutingEngine
+    std::vector<Route> routes = routingEngine->calculateRoutes(startLocation, endLocation);
+
+    if (!routes.empty()) {
+        // Use the first route (primary route) for the detailed path
+        Route primaryRoute = routes[0];
+        result = primaryRoute.points;
+
+        // Calculate bearing and speed for the path
+        calculateBearingAndSpeed(result);
+
+        LOGI("Generated road-following path with %zu points", result.size());
+    } else {
+        LOGE("Failed to generate road-following path, falling back to straight-line path");
+
+        // Fallback: Generate a straight-line path with interpolation
+        const int numPoints = std::max(10, maxSegments);
+        for (int i = 0; i < numPoints; i++) {
+            double ratio = static_cast<double>(i) / (numPoints - 1);
+            double lat = startLat + (endLat - startLat) * ratio;
+            double lon = startLon + (endLon - startLon) * ratio;
+
+            // Basic bearing calculation
+            double dx = (endLon - startLon);
+            double dy = (endLat - startLat);
+            float bearing = static_cast<float>(std::atan2(dx, dy) * 180.0 / M_PI);
+            if (bearing < 0) bearing += 360.0f;
+
+            result.emplace_back(lat, lon, bearing, 10.0f);
+        }
+
+        if (!result.empty()) {
+            result.back().speed = 0.0f;
+        }
+
+        LOGI("Created fallback straight-line path with %zu points", result.size());
+    }
+
+    return result;
+}
+
+// -------------- JNI Glue Code Below --------------
+
 jobject createRouteMatchObject(JNIEnv* env, const RouteMatch& match) {
-    // Find the RouteMatch class
     jclass routeMatchClass = env->FindClass("com/example/navigation/domain/models/RouteMatch");
-    if (routeMatchClass == nullptr) {
+    if (!routeMatchClass) {
         LOGE("Failed to find RouteMatch class");
         return nullptr;
     }
 
-    // Find the constructor
-    jmethodID constructor = env->GetMethodID(routeMatchClass, "<init>",
-                                             "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;DDF)V");
-    if (constructor == nullptr) {
+    jmethodID constructor = env->GetMethodID(
+            routeMatchClass, "<init>",
+            "(Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;DDF)V");
+    if (!constructor) {
         LOGE("Failed to find RouteMatch constructor");
-        // Add more detailed error logging
         jthrowable exception = env->ExceptionOccurred();
         if (exception) {
             env->ExceptionDescribe();
@@ -155,68 +243,63 @@ jobject createRouteMatchObject(JNIEnv* env, const RouteMatch& match) {
         return nullptr;
     }
 
-    // Create Java strings
-    jstring streetName = env->NewStringUTF(match.streetName.c_str());
+    jstring streetName   = env->NewStringUTF(match.streetName.c_str());
     jstring nextManeuver = env->NewStringUTF(match.nextManeuver.c_str());
-    jstring eta = env->NewStringUTF(match.estimatedTimeOfArrival.c_str());
+    jstring eta          = env->NewStringUTF(match.estimatedTimeOfArrival.c_str());
 
-    // Create the RouteMatch object
-    jobject result = env->NewObject(routeMatchClass, constructor,
-                                    streetName, nextManeuver, match.distanceToNext, eta,
-                                    match.matchedLatitude, match.matchedLongitude, match.matchedBearing);
+    jobject resultObj = env->NewObject(
+            routeMatchClass,
+            constructor,
+            streetName,
+            nextManeuver,
+            static_cast<jint>(match.distanceToNext),
+            eta,
+            static_cast<jdouble>(match.matchedLatitude),
+            static_cast<jdouble>(match.matchedLongitude),
+            static_cast<jfloat>(match.matchedBearing));
 
-    // Clean up local references
     env->DeleteLocalRef(streetName);
     env->DeleteLocalRef(nextManeuver);
     env->DeleteLocalRef(eta);
     env->DeleteLocalRef(routeMatchClass);
-
-    return result;
+    return resultObj;
 }
 
-// JNI method implementations
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_navigation_NavigationEngine_updateLocation(
-        JNIEnv* env, jobject thiz, jdouble lat, jdouble lon,
+        JNIEnv* env, jobject /*thiz*/,
+        jdouble lat, jdouble lon,
         jfloat bearing, jfloat speed, jfloat accuracy) {
 
     jobject result = nullptr;
-
     try {
-        // Log incoming parameters
-        LOGI("updateLocation called with: lat=%.6f, lon=%.6f, bearing=%.1f, speed=%.1f, accuracy=%.1f",
+        LOGI("updateLocation called: lat=%.6f, lon=%.6f, bearing=%.1f, speed=%.1f, accuracy=%.1f",
              lat, lon, bearing, speed, accuracy);
 
-        // Create engine if it doesn't exist
         if (!gNavigationEngine) {
             LOGI("Creating NavigationEngine instance");
             gNavigationEngine = std::make_unique<NavigationEngine>();
         }
 
-        // Update location
-        RouteMatch match = gNavigationEngine->updateLocation(
-                lat, lon, bearing, speed, accuracy);
-
-        // Convert to Java object
+        RouteMatch match = gNavigationEngine->updateLocation(lat, lon, bearing, speed, accuracy);
         result = createRouteMatchObject(env, match);
-        if (result == nullptr) {
+        if (!result) {
             LOGE("Failed to create RouteMatch object");
-            // Throw a more specific exception
-            jclass exceptionClass = env->FindClass("java/lang/IllegalStateException");
-            env->ThrowNew(exceptionClass, "Failed to create RouteMatch object");
-            env->DeleteLocalRef(exceptionClass);
+            jclass exClass = env->FindClass("java/lang/IllegalStateException");
+            env->ThrowNew(exClass, "Failed to create RouteMatch object");
+            env->DeleteLocalRef(exClass);
         }
+
     } catch (const std::exception& e) {
         LOGE("Error in updateLocation: %s", e.what());
-        jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
-        env->ThrowNew(exceptionClass, e.what());
-        env->DeleteLocalRef(exceptionClass);
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, e.what());
+        env->DeleteLocalRef(exClass);
     } catch (...) {
-        // Catch all other exceptions
         LOGE("Unknown error in updateLocation");
-        jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
-        env->ThrowNew(exceptionClass, "Unknown error in native code");
-        env->DeleteLocalRef(exceptionClass);
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, "Unknown error in native code");
+        env->DeleteLocalRef(exClass);
     }
 
     return result;
@@ -224,71 +307,66 @@ Java_com_example_navigation_NavigationEngine_updateLocation(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_navigation_NavigationEngine_setDestination(
-        JNIEnv* env, jobject thiz, jdouble lat, jdouble lon) {
+        JNIEnv* env, jobject /*thiz*/,
+        jdouble lat, jdouble lon) {
 
     try {
-        // Create engine if it doesn't exist
         if (!gNavigationEngine) {
             gNavigationEngine = std::make_unique<NavigationEngine>();
         }
+        bool success = gNavigationEngine->setDestination(lat, lon);
+        return static_cast<jboolean>(success);
 
-        // Set destination
-        return gNavigationEngine->setDestination(lat, lon);
     } catch (const std::exception& e) {
         LOGE("Error in setDestination: %s", e.what());
-        jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
-        env->ThrowNew(exceptionClass, e.what());
-        env->DeleteLocalRef(exceptionClass);
-        return false;
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, e.what());
+        env->DeleteLocalRef(exClass);
+        return JNI_FALSE;
     }
 }
 
-// Helper function to convert C++ Route to Java Route object
 jobject createRouteObject(JNIEnv* env, const Route& route) {
-    // Find the Route class
     jclass routeClass = env->FindClass("com/example/navigation/domain/models/Route");
-    if (routeClass == nullptr) {
+    if (!routeClass) {
         LOGE("Failed to find Route class");
         return nullptr;
     }
 
-    // Find the Location class
     jclass locationClass = env->FindClass("com/example/navigation/domain/models/Location");
-    if (locationClass == nullptr) {
+    if (!locationClass) {
         LOGE("Failed to find Location class");
         env->DeleteLocalRef(routeClass);
         return nullptr;
     }
 
-    // Find Location constructor
-    jmethodID locationConstructor = env->GetMethodID(locationClass, "<init>",
-                                                     "(DDFFF)V");
-    if (locationConstructor == nullptr) {
+    jmethodID locationConstructor = env->GetMethodID(locationClass, "<init>", "(DDFFF)V");
+    if (!locationConstructor) {
         LOGE("Failed to find Location constructor");
         env->DeleteLocalRef(locationClass);
         env->DeleteLocalRef(routeClass);
         return nullptr;
     }
 
-    // Create the points ArrayList
     jclass arrayListClass = env->FindClass("java/util/ArrayList");
-    jmethodID arrayListConstructor = env->GetMethodID(arrayListClass, "<init>", "()V");
-    jmethodID arrayListAdd = env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+    jmethodID arrayListCtor = env->GetMethodID(arrayListClass, "<init>", "()V");
+    jmethodID arrayListAdd  = env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
 
-    jobject pointsList = env->NewObject(arrayListClass, arrayListConstructor);
+    jobject pointsList = env->NewObject(arrayListClass, arrayListCtor);
 
-    // Add points to the list
     for (const auto& point : route.points) {
-        jobject locationObject = env->NewObject(locationClass, locationConstructor,
-                                                point.latitude, point.longitude, point.bearing, point.speed, point.accuracy);
+        jobject locationObject = env->NewObject(
+                locationClass,
+                locationConstructor,
+                point.latitude, point.longitude,
+                point.bearing, point.speed, point.accuracy);
         env->CallBooleanMethod(pointsList, arrayListAdd, locationObject);
         env->DeleteLocalRef(locationObject);
     }
 
-    // Find Route constructor
-    jmethodID routeConstructor = env->GetMethodID(routeClass, "<init>",
-                                                  "(Ljava/lang/String;Ljava/util/List;ILjava/lang/String;)V");
-    if (routeConstructor == nullptr) {
+    jmethodID routeCtor = env->GetMethodID(
+            routeClass, "<init>", "(Ljava/lang/String;Ljava/util/List;ILjava/lang/String;)V");
+    if (!routeCtor) {
         LOGE("Failed to find Route constructor");
         env->DeleteLocalRef(pointsList);
         env->DeleteLocalRef(arrayListClass);
@@ -297,46 +375,40 @@ jobject createRouteObject(JNIEnv* env, const Route& route) {
         return nullptr;
     }
 
-    // Create Java strings
-    jstring id = env->NewStringUTF(route.id.c_str());
-    jstring name = env->NewStringUTF(route.name.c_str());
+    jstring jId   = env->NewStringUTF(route.id.c_str());
+    jstring jName = env->NewStringUTF(route.name.c_str());
 
-    // Create the Route object
-    jobject result = env->NewObject(routeClass, routeConstructor,
-                                    id, pointsList, route.durationSeconds, name);
+    jobject routeObj = env->NewObject(
+            routeClass, routeCtor,
+            jId, pointsList,
+            static_cast<jint>(route.durationSeconds),
+            jName);
 
-    // Clean up local references
-    env->DeleteLocalRef(id);
-    env->DeleteLocalRef(name);
+    env->DeleteLocalRef(jId);
+    env->DeleteLocalRef(jName);
     env->DeleteLocalRef(pointsList);
     env->DeleteLocalRef(arrayListClass);
     env->DeleteLocalRef(locationClass);
     env->DeleteLocalRef(routeClass);
-
-    return result;
+    return routeObj;
 }
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_navigation_NavigationEngine_getAlternativeRoutes(
-        JNIEnv* env, jobject thiz) {
+        JNIEnv* env, jobject /*thiz*/) {
 
     try {
-        // Create engine if it doesn't exist
         if (!gNavigationEngine) {
             gNavigationEngine = std::make_unique<NavigationEngine>();
         }
 
-        // Get routes
         std::vector<Route> routes = gNavigationEngine->getAlternativeRoutes();
+        jclass arrayListClass     = env->FindClass("java/util/ArrayList");
+        jmethodID arrayListCtor   = env->GetMethodID(arrayListClass, "<init>", "()V");
+        jmethodID arrayListAdd    = env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
 
-        // Create the ArrayList to return
-        jclass arrayListClass = env->FindClass("java/util/ArrayList");
-        jmethodID arrayListConstructor = env->GetMethodID(arrayListClass, "<init>", "()V");
-        jmethodID arrayListAdd = env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+        jobject routesList = env->NewObject(arrayListClass, arrayListCtor);
 
-        jobject routesList = env->NewObject(arrayListClass, arrayListConstructor);
-
-        // Add routes to the list
         for (const auto& route : routes) {
             jobject routeObject = createRouteObject(env, route);
             if (routeObject) {
@@ -347,37 +419,83 @@ Java_com_example_navigation_NavigationEngine_getAlternativeRoutes(
 
         env->DeleteLocalRef(arrayListClass);
         return routesList;
+
     } catch (const std::exception& e) {
         LOGE("Error in getAlternativeRoutes: %s", e.what());
-        jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
-        env->ThrowNew(exceptionClass, e.what());
-        env->DeleteLocalRef(exceptionClass);
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, e.what());
+        env->DeleteLocalRef(exClass);
         return nullptr;
     }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_navigation_NavigationEngine_switchToRoute(
-        JNIEnv* env, jobject thiz, jstring routeId) {
+        JNIEnv* env, jobject /*thiz*/,
+        jstring routeId) {
 
     try {
-        // Create engine if it doesn't exist
         if (!gNavigationEngine) {
             gNavigationEngine = std::make_unique<NavigationEngine>();
         }
 
-        // Convert Java string to C++ string
         const char* idChars = env->GetStringUTFChars(routeId, nullptr);
-        std::string id(idChars);
+        std::string id(idChars ? idChars : "");
         env->ReleaseStringUTFChars(routeId, idChars);
 
-        // Switch route
-        return gNavigationEngine->switchToRoute(id);
+        bool success = gNavigationEngine->switchToRoute(id);
+        return static_cast<jboolean>(success);
+
     } catch (const std::exception& e) {
         LOGE("Error in switchToRoute: %s", e.what());
-        jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
-        env->ThrowNew(exceptionClass, e.what());
-        env->DeleteLocalRef(exceptionClass);
-        return false;
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, e.what());
+        env->DeleteLocalRef(exClass);
+        return JNI_FALSE;
+    }
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_example_navigation_NavigationEngine_getDetailedPath(
+        JNIEnv* env, jobject /*thiz*/,
+        jdouble startLat, jdouble startLon,
+        jdouble endLat, jdouble endLon,
+        jint maxSegments) {
+
+    try {
+        if (!gNavigationEngine) {
+            gNavigationEngine = std::make_unique<NavigationEngine>();
+        }
+
+        std::vector<Location> path = gNavigationEngine->getDetailedPath(
+                startLat, startLon, endLat, endLon, maxSegments);
+
+        jclass arrayListClass     = env->FindClass("java/util/ArrayList");
+        jmethodID arrayListCtor   = env->GetMethodID(arrayListClass, "<init>", "()V");
+        jmethodID arrayListAdd    = env->GetMethodID(arrayListClass, "add", "(Ljava/lang/Object;)Z");
+
+        jobject resultList = env->NewObject(arrayListClass, arrayListCtor);
+
+        jclass locationClass = env->FindClass("com/example/navigation/domain/models/Location");
+        jmethodID locationCtor = env->GetMethodID(locationClass, "<init>", "(DDFFF)V");
+
+        for (const auto& loc : path) {
+            jobject locObject = env->NewObject(locationClass, locationCtor,
+                                               loc.latitude, loc.longitude,
+                                               loc.bearing, loc.speed, loc.accuracy);
+            env->CallBooleanMethod(resultList, arrayListAdd, locObject);
+            env->DeleteLocalRef(locObject);
+        }
+
+        env->DeleteLocalRef(locationClass);
+        env->DeleteLocalRef(arrayListClass);
+        return resultList;
+
+    } catch (const std::exception& e) {
+        LOGE("Error in getDetailedPath: %s", e.what());
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, e.what());
+        env->DeleteLocalRef(exClass);
+        return nullptr;
     }
 }

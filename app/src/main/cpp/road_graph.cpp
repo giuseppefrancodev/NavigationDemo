@@ -50,8 +50,8 @@ void RoadGraph::createDemoNetwork() {
     
     // Create nodes in a grid pattern
     constexpr int gridSize = 10;
-    constexpr double baseLatitude = 37.7749; // San Francisco
-    constexpr double baseLongitude = -122.4194;
+    constexpr double baseLatitude = 60.1600; // Helsinki
+    constexpr double baseLongitude = 24.8778;
     constexpr double spacing = 0.001; // roughly 100 meters
     
     // Create grid nodes

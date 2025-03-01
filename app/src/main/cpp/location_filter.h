@@ -5,11 +5,17 @@
 
 // Location data structure
 struct Location {
-    double latitude;
-    double longitude;
-    float bearing;
-    float speed;
-    float accuracy;
+    double latitude   = 0.0;
+    double longitude  = 0.0;
+    float bearing     = 0.0f;
+    float speed       = 0.0f;
+    float accuracy    = 0.0f;
+
+    // Added constructor for convenience
+    Location() = default;
+
+    Location(double lat, double lon, float b, float s, float a = 0.0f)
+            : latitude(lat), longitude(lon), bearing(b), speed(s), accuracy(a) {}
 };
 
 class LocationFilter {
