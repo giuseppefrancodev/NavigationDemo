@@ -1,3 +1,10 @@
+/*
+ * File: Route.kt
+ * Description: Data class representing a navigation route with points, duration, and distance calculations.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.domain.models
 
 import com.example.navigation.utils.FormatUtils
@@ -12,7 +19,7 @@ data class Route(
     val durationFormatted: String
         get() = FormatUtils.formatDuration(durationSeconds)
 
-    val distanceMeters: Int
+    private val distanceMeters: Int
         get() {
             var distance = 0.0
             for (i in 0 until points.size - 1) {

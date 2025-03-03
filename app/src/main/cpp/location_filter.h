@@ -1,9 +1,15 @@
+/*
+ * File: location_filter.h
+ * Description: Header file for the LocationFilter class, defining the structure for filtering and smoothing location data.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 #pragma once
 
 #include <chrono>
 #include <optional>
 
-// Location data structure
 struct Location {
     double latitude   = 0.0;
     double longitude  = 0.0;
@@ -11,7 +17,6 @@ struct Location {
     float speed       = 0.0f;
     float accuracy    = 0.0f;
 
-    // Added constructor for convenience
     Location() = default;
 
     Location(double lat, double lon, float b, float s, float a = 0.0f)
@@ -22,25 +27,20 @@ class LocationFilter {
 public:
     LocationFilter();
 
-    // Process a raw location and return a filtered location
     Location process(const Location& raw);
 
 private:
     bool initialized = false;
 
-    // Simple state representation without Eigen
-    double lat;         // Current latitude
-    double lon;         // Current longitude
-    double lat_vel;     // Latitude velocity
-    double lon_vel;     // Longitude velocity
+    double lat;
+    double lon;
+    double lat_vel;
+    double lon_vel;
 
-    // Covariance and noise values
     double positionVariance;
     double velocityVariance;
     double processNoisePosition;
     double processNoiseVelocity;
-    double measurementNoise;
 
-    // Last timestamp for velocity calculation
     long long lastTimestamp = 0;
 };

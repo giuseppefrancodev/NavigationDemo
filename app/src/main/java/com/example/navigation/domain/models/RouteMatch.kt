@@ -1,3 +1,10 @@
+/*
+ * File: RouteMatch.kt
+ * Description: Data class representing a matched route segment with street name, next maneuver, and distance to the next step.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.domain.models
 
 import com.example.navigation.utils.LocationUtils

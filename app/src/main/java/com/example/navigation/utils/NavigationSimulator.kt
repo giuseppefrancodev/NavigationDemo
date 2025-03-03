@@ -1,23 +1,25 @@
+/*
+ * File: NavigationSimulator.kt
+ * Description: Simulator class for testing navigation functionality by simulating location updates and route matching.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.utils
 
 import android.util.Log
-import com.example.navigation.NavigationEngine
 import com.example.navigation.domain.models.Location
 import com.example.navigation.domain.models.Route
 import com.example.navigation.domain.models.RouteMatch
-import kotlinx.coroutines.*
+import com.example.navigation.interfaces.NavigationEngineInterface
 import java.util.UUID
 import kotlin.math.max
-import kotlin.math.min
+import kotlinx.coroutines.*
 
 private const val TAG = "NavigationSimulator"
 
-/**
- * Utility class for simulating navigation by generating a series of location updates
- * that follow a path. Used for demo and testing purposes.
- */
 class NavigationSimulator(
-    private val navigationEngine: NavigationEngine,
+    private val navigationEngine: NavigationEngineInterface,
     private val coroutineScope: CoroutineScope
 ) {
     interface SimulationCallback {
@@ -31,26 +33,17 @@ class NavigationSimulator(
     private var simulationJob: Job? = null
     private var currentCallback: SimulationCallback? = null
 
-    /**
-     * Start a simulation using the provided route and callback.
-     *
-     * 1. If 'route' is null, we'll try to compute a real route from the NavigationEngine
-     *    (this will follow the road graph).
-     * 2. If that fails, we create a fallback "straight line" route as a last resort.
-     */
     fun startSimulation(
         route: Route?,
         currentLocation: Location?,
         destination: Location?,
         callback: SimulationCallback
     ): Boolean {
-        // Stop any existing simulation
         if (simulationJob?.isActive == true) {
             Log.w(TAG, "Simulation already running, stopping previous simulation")
             stopSimulation()
         }
 
-        // Validate inputs
         if (currentLocation == null) {
             Log.e(TAG, "Cannot start simulation - current location not available")
             return false
@@ -63,18 +56,13 @@ class NavigationSimulator(
         currentCallback = callback
 
         try {
-            // 1) If the caller didn't supply a route, compute one via the NavigationEngine
             val simulationRoute: Route = route ?: run {
-                // -> Use setDestination to run the real road-based routing
                 navigationEngine.setDestination(destination.latitude, destination.longitude)
 
-                // -> Grab the computed alternatives
                 val computedRoutes = navigationEngine.getAlternativeRoutes()
                 if (computedRoutes.isNotEmpty()) {
-                    // We'll pick the first route as the "best" or "primary"
                     computedRoutes[0]
                 } else {
-                    // Fallback: if no routes found from the engine, do a linear route
                     Log.w(TAG, "No real routes found - using fallback linear path")
 
                     val fallbackPath = createStraightLinePath(currentLocation, destination)
@@ -82,7 +70,6 @@ class NavigationSimulator(
                 }
             }
 
-            // 2) Start simulation using that route
             simulationJob = coroutineScope.launch {
                 simulateNavigation(simulationRoute.points, simulationRoute, callback)
             }
@@ -95,9 +82,6 @@ class NavigationSimulator(
         }
     }
 
-    /**
-     * Stop the current simulation if one is running.
-     */
     fun stopSimulation() {
         simulationJob?.cancel()
         simulationJob = null
@@ -105,52 +89,43 @@ class NavigationSimulator(
         Log.d(TAG, "Simulation stopped")
     }
 
-    /**
-     * Core simulation function that interpolates between the route's points to create
-     * a smooth navigation experience.
-     */
-    private suspend fun simulateNavigation(
-        path: List<Location>,
-        route: Route,
-        callback: SimulationCallback
-    ) {
+    private suspend fun simulateNavigation(path: List<Location>, route: Route, callback: SimulationCallback) {
         if (path.isEmpty()) {
             callback.onSimulationError("Path is empty, cannot simulate navigation")
             return
         }
 
         try {
-            // Speed factor for faster/slower simulation
             val speedFactor = 5.0
 
-            // Go through each segment in the route
             for (i in 0 until path.size - 1) {
                 val startPoint = path[i]
-                val endPoint   = path[i + 1]
+                val endPoint = path[i + 1]
 
-                // Distance & bearing between these points
                 val distance = LocationUtils.calculateDistanceInMeters(
-                    startPoint.latitude, startPoint.longitude,
-                    endPoint.latitude, endPoint.longitude
+                    startPoint.latitude,
+                    startPoint.longitude,
+                    endPoint.latitude,
+                    endPoint.longitude
                 )
                 val bearing = LocationUtils.calculateBearing(
-                    startPoint.latitude, startPoint.longitude,
-                    endPoint.latitude, endPoint.longitude
+                    startPoint.latitude,
+                    startPoint.longitude,
+                    endPoint.latitude,
+                    endPoint.longitude
                 )
 
-                // Speed (m/s) - pick from the route's points or a default
                 val speedMps = max(endPoint.speed, 10f)
 
-                // Time to travel this segment
                 val timeNeededSeconds = (distance / speedMps / speedFactor).toInt()
-                val numSteps = max(10, timeNeededSeconds) // at least 10 steps
+                val numSteps = max(10, timeNeededSeconds)
 
                 Log.d(
-                    TAG, "Segment $i: distance=${distance}m, bearing=$bearing°, " +
-                            "time=${timeNeededSeconds}s, steps=$numSteps"
+                    TAG,
+                    "Segment $i: distance=${distance}m, bearing=$bearing°, " +
+                        "time=${timeNeededSeconds}s, steps=$numSteps"
                 )
 
-                // Create intermediate updates
                 for (step in 0..numSteps) {
                     if (!coroutineScope.isActive) {
                         Log.d(TAG, "Simulation cancelled during execution")
@@ -160,7 +135,6 @@ class NavigationSimulator(
                     val ratio = step.toDouble() / numSteps
                     val interpolatedPoint = interpolateLocation(startPoint, endPoint, ratio, bearing)
 
-                    // Push location to the engine
                     val routeMatch = navigationEngine.updateLocation(
                         interpolatedPoint.latitude,
                         interpolatedPoint.longitude,
@@ -176,12 +150,10 @@ class NavigationSimulator(
                     callback.onLocationUpdated(interpolatedPoint)
                     callback.onRouteMatchUpdated(updatedRouteMatch)
 
-                    // ~30fps
                     delay(33L)
                 }
             }
 
-            // Done
             Log.d(TAG, "Simulation completed successfully")
             callback.onSimulationCompleted()
         } catch (e: Exception) {
@@ -194,16 +166,7 @@ class NavigationSimulator(
         }
     }
 
-    /**
-     * Interpolate between two points in the route for smooth movement.
-     * (Same logic you already have.)
-     */
-    private fun interpolateLocation(
-        start: Location,
-        end: Location,
-        ratio: Double,
-        bearing: Double
-    ): Location {
+    private fun interpolateLocation(start: Location, end: Location, ratio: Double, bearing: Double): Location {
         val lat = start.latitude + (end.latitude - start.latitude) * ratio
         val lon = start.longitude + (end.longitude - start.longitude) * ratio
 
@@ -219,37 +182,29 @@ class NavigationSimulator(
         )
     }
 
-    /**
-     * If no road-based route is found, we create a simple linear path from current to destination.
-     */
     private fun createStraightLinePath(start: Location, end: Location): List<Location> {
         val path = mutableListOf<Location>()
 
-        // E.g. 30 points
         val segments = 30
         for (i in 0..segments) {
             val ratio = i.toDouble() / segments.toDouble()
             val lat = start.latitude + (end.latitude - start.latitude) * ratio
             val lon = start.longitude + (end.longitude - start.longitude) * ratio
-            // Keep speed, etc. as desired
+
             path.add(Location(lat, lon, 0f, 10f, 5f))
         }
         return path
     }
 
-    /**
-     * Create a Route object from a path of locations (used for fallback or test).
-     */
     private fun createRouteFromPath(path: List<Location>): Route {
-        // Basic distance sum
         var totalDistance = 0.0
         for (i in 1 until path.size) {
             totalDistance += LocationUtils.calculateDistanceInMeters(
                 path[i - 1].latitude, path[i - 1].longitude,
-                path[i].latitude,     path[i].longitude
+                path[i].latitude, path[i].longitude
             )
         }
-        // Example speed ~8.33m/s => ~30km/h
+
         val durationSeconds = (totalDistance / 8.33).toInt()
 
         return Route(

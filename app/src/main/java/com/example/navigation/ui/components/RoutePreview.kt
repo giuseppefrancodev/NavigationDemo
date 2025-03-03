@@ -1,3 +1,10 @@
+/*
+ * File: RoutePreview.kt
+ * Description: Composable UI component for previewing and selecting navigation routes, including alternative routes.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.ui.components
 
 import androidx.compose.foundation.background
@@ -28,7 +35,7 @@ fun RoutePreview(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .height(260.dp), // Increased height to avoid overlapping
+            .height(260.dp),
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
     ) {
@@ -37,7 +44,6 @@ fun RoutePreview(
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            // Route summary
             Text(
                 text = "Route to ${currentRoute.name}",
                 style = MaterialTheme.typography.headlineSmall,
@@ -47,7 +53,6 @@ fun RoutePreview(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Route details
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -64,7 +69,6 @@ fun RoutePreview(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Alternative routes
             if (alternativeRoutes.size > 1) {
                 Text(
                     text = "Alternative Routes",
@@ -92,17 +96,16 @@ fun RoutePreview(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Start navigation button
             Button(
                 onClick = onStartNavigation,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp), // Increased height for better visibility
+                    .height(56.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
-                shape = RoundedCornerShape(12.dp) // Rounded corners for the button
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text(
                     text = "Start Navigation",
@@ -115,19 +118,18 @@ fun RoutePreview(
 }
 
 @Composable
-fun RouteOption(
-    route: Route,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
+fun RouteOption(route: Route, isSelected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
-            .width(100.dp) // Increased width for better readability
+            .width(100.dp)
             .height(40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (isSelected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant
+                if (isSelected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                }
             )
             .clickable(onClick = onClick)
             .padding(8.dp),
@@ -135,8 +137,11 @@ fun RouteOption(
     ) {
         Text(
             text = route.durationFormatted,
-            color = if (isSelected) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (isSelected) {
+                MaterialTheme.colorScheme.onPrimary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium
         )
@@ -144,10 +149,7 @@ fun RouteOption(
 }
 
 @Composable
-fun RouteDetailItem(
-    label: String,
-    value: String
-) {
+fun RouteDetailItem(label: String, value: String) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

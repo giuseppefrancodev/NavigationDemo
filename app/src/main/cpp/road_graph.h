@@ -1,3 +1,10 @@
+/*
+ * File: road_graph.h
+ * Description: Header file for the RoadGraph class, defining road network structures and spatial indexing.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 #pragma once
 
 #include <memory>
@@ -6,10 +13,9 @@
 #include <unordered_map>
 #include "location_filter.h"
 
-// Forward declarations
 class SpatialIndex;
+class OSMParser;
 
-// Road type enum
 enum class RoadType {
     HIGHWAY,
     PRIMARY,
@@ -18,7 +24,6 @@ enum class RoadType {
     SERVICE
 };
 
-// Road graph structures
 struct Node;
 
 struct RoadSegment {
@@ -27,7 +32,12 @@ struct RoadSegment {
     std::string name;
     double speedLimit;
     RoadType type;
-    double length;  // meters
+    double length;
+    int id;
+
+    bool isOneway = false;
+    float priority = 1.0f;
+    std::vector<std::pair<RoadSegment*, double>> turnCosts;
 };
 
 struct Node {
@@ -41,28 +51,30 @@ class RoadGraph {
 public:
     RoadGraph();
     ~RoadGraph();
-    
-    // Find nearby road segments within radius
+
     std::vector<RoadSegment*> findNearbyRoads(const Location& loc, double radius);
-    
-    // Get node by ID
+
     Node* getNode(const std::string& id);
-    
-    // Create a demo road network for testing
-    void createDemoNetwork();
-    
+
+    bool loadOSMData(const std::string& filePath);
+
+    size_t getNodesCount() const { return nodes.size(); }
+    size_t getSegmentsCount() const { return segments.size(); }
+
+    Node* addNode(const std::string& id, double lat, double lon);
+
+    RoadSegment* addSegment(Node* start, Node* end, const std::string& name,
+                            double speedLimit, RoadType type);
+
+    static double haversineDistance(double lat1, double lon1, double lat2, double lon2);
+
+    void clear();
+
 private:
     std::unordered_map<std::string, std::unique_ptr<Node>> nodes;
     std::vector<std::unique_ptr<RoadSegment>> segments;
     std::unique_ptr<SpatialIndex> spatialIndex;
-    
-    // Helper to add a node
-    Node* addNode(const std::string& id, double lat, double lon);
-    
-    // Helper to add a road segment
-    RoadSegment* addSegment(Node* start, Node* end, const std::string& name, 
-                          double speedLimit, RoadType type);
-                          
-    // Calculate distance between two points
-    static double haversineDistance(double lat1, double lon1, double lat2, double lon2);
+    std::unique_ptr<OSMParser> osmParser;
+
+    int nextSegmentId = 1;
 };
