@@ -1,3 +1,10 @@
+/*
+ * File: LocationPermissionRequest.kt
+ * Description: Composable UI component for requesting location permissions from the user.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.ui.components
 
 import androidx.compose.foundation.background
@@ -20,15 +27,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-/**
- * A dialog that prompts the user to grant location permissions.
- * This is displayed when the app needs location permissions but doesn't have them yet.
- */
 @Composable
-fun LocationPermissionRequest(
-    onRequestPermission: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+fun LocationPermissionRequest(onRequestPermission: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -70,10 +70,6 @@ fun LocationPermissionRequest(
     }
 }
 
-/**
- * Helper function to check and request location permissions.
- * This is extracted from HomeScreen.kt to improve readability.
- */
 fun checkAndRequestLocationPermissions(
     context: android.content.Context,
     launcher: androidx.activity.result.ActivityResultLauncher<Array<String>>,

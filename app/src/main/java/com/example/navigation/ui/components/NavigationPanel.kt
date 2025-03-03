@@ -1,24 +1,24 @@
+/*
+ * File: NavigationPanel.kt
+ * Description: Composable UI component for displaying navigation information such as street name, next maneuver, and ETA.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.navigation.domain.models.RouteMatch
 
 @Composable
-fun NavigationPanel(
-    routeMatch: RouteMatch?,
-    onStopNavigation: () -> Unit,
-    modifier: Modifier = Modifier
-) {
+fun NavigationPanel(routeMatch: RouteMatch?, onStopNavigation: () -> Unit, modifier: Modifier = Modifier) {
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -32,7 +32,6 @@ fun NavigationPanel(
                 .padding(16.dp)
         ) {
             if (routeMatch != null) {
-                // Current street
                 Text(
                     text = routeMatch.streetName,
                     style = MaterialTheme.typography.headlineSmall,
@@ -41,13 +40,10 @@ fun NavigationPanel(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Next maneuver
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Maneuver icon would go here
-
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = routeMatch.nextManeuver,
@@ -64,7 +60,6 @@ fun NavigationPanel(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // ETA
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -83,7 +78,6 @@ fun NavigationPanel(
 
                 Spacer(modifier = Modifier.weight(1f))
             } else {
-                // Placeholder when no match is available
                 Box(
                     modifier = Modifier.weight(1f),
                     contentAlignment = Alignment.Center
@@ -95,7 +89,6 @@ fun NavigationPanel(
                 }
             }
 
-            // Stop navigation button
             Button(
                 onClick = onStopNavigation,
                 modifier = Modifier.align(Alignment.End),

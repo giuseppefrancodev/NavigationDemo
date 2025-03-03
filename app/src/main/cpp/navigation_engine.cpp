@@ -1,5 +1,14 @@
+/*
+ * File: navigation_engine.cpp
+ * Description: Implementation of the NavigationEngine class, responsible for managing navigation logic, route calculations, and location updates.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 #include "navigation_engine.h"
 #include <android/log.h>
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
 #include <jni.h>
 #include <memory>
 #include <stdexcept>
@@ -7,7 +16,7 @@
 #include <chrono>
 #include <string>
 #include <cmath>
-#include <algorithm> // for std::clamp (C++17+)
+#include <algorithm>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -17,11 +26,26 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Global instance for JNI usage
+static JavaVM* gJavaVM = nullptr;
+static jobject gNavigationEngineObj = nullptr;
+
 static std::unique_ptr<NavigationEngine> gNavigationEngine;
+static jobject gContext = nullptr;
+
+JNIEnv* getJNIEnv() {
+    JNIEnv* env = nullptr;
+    if (gJavaVM->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+
+        if (gJavaVM->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+            LOGE("Error in getJNIEnv: Failed to attach thread to JVM");
+            return nullptr;
+        }
+    }
+    return env;
+}
 
 double NavigationEngine::haversineDistance(double lat1, double lon1, double lat2, double lon2) {
-    constexpr double R = 6371000.0; // Earth radius in meters
+    constexpr double R = 6371000.0;
     double phi1 = lat1 * M_PI / 180.0;
     double phi2 = lat2 * M_PI / 180.0;
     double dPhi = (lat2 - lat1) * M_PI / 180.0;
@@ -52,17 +76,107 @@ NavigationEngine::~NavigationEngine() {
     LOGI("Destroying NavigationEngine");
 }
 
+bool NavigationEngine::loadOSMFromAssets(AAssetManager* assetManager, const std::string& fileName) {
+    if (!assetManager) {
+        LOGE("Asset manager is null");
+        return false;
+    }
+    LOGI("Attempting to load OSM data from assets: %s", fileName.c_str());
+    AAsset* asset = AAssetManager_open(assetManager, fileName.c_str(), AASSET_MODE_BUFFER);
+    if (!asset) {
+        LOGE("Failed to open asset %s", fileName.c_str());
+        return false;
+    }
+
+    off_t fileSize = AAsset_getLength(asset);
+    LOGI("Asset size: %ld bytes", fileSize);
+    if (fileSize == 0) {
+        LOGE("Asset file is empty");
+        AAsset_close(asset);
+        return false;
+    }
+
+    char* buffer = (char*)malloc(fileSize + 1);
+    if (!buffer) {
+        LOGE("Failed to allocate memory for asset");
+        AAsset_close(asset);
+        return false;
+    }
+
+    const size_t CHUNK_SIZE = 1024 * 1024;
+    size_t totalRead = 0;
+    size_t bytesRead = 0;
+    int lastProgressPercent = 0;
+
+    while (totalRead < fileSize) {
+        size_t bytesToRead = std::min(CHUNK_SIZE, static_cast<size_t>(fileSize) - totalRead);
+        bytesRead = AAsset_read(asset, buffer + totalRead, bytesToRead);
+
+        if (bytesRead <= 0) {
+            LOGE("Failed to read chunk from asset");
+            break;
+        }
+
+        totalRead += bytesRead;
+
+        int progressPercent = (totalRead * 100) / fileSize;
+        if (progressPercent - lastProgressPercent >= 5) {
+            LOGI("Reading OSM file: %d%% complete", progressPercent);
+            lastProgressPercent = progressPercent;
+        }
+    }
+    buffer[totalRead] = '\0';
+    std::string tempFilePath = "/data/data/com.example.navigation/temp_osm_file";
+
+    FILE* tempFile = fopen(tempFilePath.c_str(), "wb");
+    if (!tempFile) {
+        LOGE("Failed to create temporary file");
+        free(buffer);
+        AAsset_close(asset);
+        return false;
+    }
+
+    size_t bytesWritten = fwrite(buffer, 1, totalRead, tempFile);
+    fclose(tempFile);
+
+    if (bytesWritten != totalRead) {
+        LOGE("Failed to write all data to temporary file");
+        free(buffer);
+        AAsset_close(asset);
+        return false;
+    }
+
+    free(buffer);
+    AAsset_close(asset);
+
+    bool success = roadGraph->loadOSMData(tempFilePath);
+
+    if (success) {
+        size_t nodeCount = roadGraph->getNodesCount();
+        size_t segCount  = roadGraph->getSegmentsCount();
+        LOGI("OSM data load success. Nodes: %zu, Segments: %zu", nodeCount, segCount);
+
+        if (nodeCount == 0 || segCount == 0) {
+            LOGE("OSM data loaded but contains no nodes or segments");
+            success = false;
+        }
+    } else {
+        LOGE("Failed to parse OSM data");
+    }
+
+    remove(tempFilePath.c_str());
+    return success;
+}
+
 RouteMatch NavigationEngine::updateLocation(double lat, double lon, float bearing,
                                             float speed, float accuracy) {
     Location rawLocation{ lat, lon, bearing, speed, accuracy };
     LOGI("Processing location: lat=%.6f, lon=%.6f, bearing=%.1f, speed=%.1f, accuracy=%.1f",
          lat, lon, bearing, speed, accuracy);
 
-    // Filter raw location data
     Location filtered = locationFilter->process(rawLocation);
     currentLocation = filtered;
 
-    // If there's a destination and no routes yet, compute routes
     if (destinationLocation.has_value() && alternativeRoutes.empty()) {
         LOGI("Calculating routes to saved destination");
         alternativeRoutes = routingEngine->calculateRoutes(
@@ -76,12 +190,10 @@ RouteMatch NavigationEngine::updateLocation(double lat, double lon, float bearin
         }
     }
 
-    // If we have a route, do route matching
     if (currentRoute) {
         return routeMatcher->match(filtered);
     }
 
-    // Otherwise, return placeholder
     return RouteMatch{
             .streetName             = "No active route",
             .nextManeuver           = "Set a destination",
@@ -149,17 +261,14 @@ void NavigationEngine::calculateBearingAndSpeed(std::vector<Location>& path) {
         if (bearing < 0.0f) bearing += 360.0f;
         path[i].bearing = bearing;
 
-        // Estimate speed by naive distance / 60sec
         double distance = haversineDistance(
                 path[i].latitude, path[i].longitude,
                 path[i + 1].latitude, path[i + 1].longitude);
         float rawSpeed = static_cast<float>(distance / 60.0);
 
-        // clamp speed to 5..20
         path[i].speed = std::clamp(rawSpeed, 5.0f, 20.0f);
     }
 
-    // Last point
     if (path.size() > 1) {
         path.back().bearing = path[path.size() - 2].bearing;
         path.back().speed   = 0.0f;
@@ -175,33 +284,28 @@ std::vector<Location> NavigationEngine::getDetailedPath(
     LOGI("Generating path from (%.6f,%.6f) to (%.6f,%.6f)",
          startLat, startLon, endLat, endLon);
 
-    // Use RoutingEngine to calculate a route
-    Location startLocation{ startLat, startLon, 0.0f, 0.0f }; // Default bearing and speed
-    Location endLocation{ endLat, endLon, 0.0f, 0.0f };       // Default bearing and speed
+    Location startLocation{ startLat, startLon, 0.0f, 0.0f };
+    Location endLocation{ endLat, endLon, 0.0f, 0.0f };
 
-    // Calculate routes using RoutingEngine
     std::vector<Route> routes = routingEngine->calculateRoutes(startLocation, endLocation);
 
     if (!routes.empty()) {
-        // Use the first route (primary route) for the detailed path
+
         Route primaryRoute = routes[0];
         result = primaryRoute.points;
 
-        // Calculate bearing and speed for the path
         calculateBearingAndSpeed(result);
 
         LOGI("Generated road-following path with %zu points", result.size());
     } else {
         LOGE("Failed to generate road-following path, falling back to straight-line path");
 
-        // Fallback: Generate a straight-line path with interpolation
         const int numPoints = std::max(10, maxSegments);
         for (int i = 0; i < numPoints; i++) {
             double ratio = static_cast<double>(i) / (numPoints - 1);
             double lat = startLat + (endLat - startLat) * ratio;
             double lon = startLon + (endLon - startLon) * ratio;
 
-            // Basic bearing calculation
             double dx = (endLon - startLon);
             double dy = (endLat - startLat);
             float bearing = static_cast<float>(std::atan2(dx, dy) * 180.0 / M_PI);
@@ -219,8 +323,6 @@ std::vector<Location> NavigationEngine::getDetailedPath(
 
     return result;
 }
-
-// -------------- JNI Glue Code Below --------------
 
 jobject createRouteMatchObject(JNIEnv* env, const RouteMatch& match) {
     jclass routeMatchClass = env->FindClass("com/example/navigation/domain/models/RouteMatch");
@@ -265,9 +367,16 @@ jobject createRouteMatchObject(JNIEnv* env, const RouteMatch& match) {
     return resultObj;
 }
 
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    gJavaVM = vm;
+    return JNI_VERSION_1_6;
+}
+
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_navigation_NavigationEngine_updateLocation(
-        JNIEnv* env, jobject /*thiz*/,
+        JNIEnv* env, jobject
+
+,
         jdouble lat, jdouble lon,
         jfloat bearing, jfloat speed, jfloat accuracy) {
 
@@ -307,7 +416,9 @@ Java_com_example_navigation_NavigationEngine_updateLocation(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_navigation_NavigationEngine_setDestination(
-        JNIEnv* env, jobject /*thiz*/,
+        JNIEnv* env, jobject
+
+,
         jdouble lat, jdouble lon) {
 
     try {
@@ -395,7 +506,9 @@ jobject createRouteObject(JNIEnv* env, const Route& route) {
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_navigation_NavigationEngine_getAlternativeRoutes(
-        JNIEnv* env, jobject /*thiz*/) {
+        JNIEnv* env, jobject
+
+) {
 
     try {
         if (!gNavigationEngine) {
@@ -431,7 +544,9 @@ Java_com_example_navigation_NavigationEngine_getAlternativeRoutes(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_navigation_NavigationEngine_switchToRoute(
-        JNIEnv* env, jobject /*thiz*/,
+        JNIEnv* env, jobject
+
+,
         jstring routeId) {
 
     try {
@@ -457,7 +572,9 @@ Java_com_example_navigation_NavigationEngine_switchToRoute(
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_com_example_navigation_NavigationEngine_getDetailedPath(
-        JNIEnv* env, jobject /*thiz*/,
+        JNIEnv* env, jobject
+
+,
         jdouble startLat, jdouble startLon,
         jdouble endLat, jdouble endLon,
         jint maxSegments) {
@@ -499,3 +616,95 @@ Java_com_example_navigation_NavigationEngine_getDetailedPath(
         return nullptr;
     }
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_navigation_NavigationEngine_setContext(
+        JNIEnv* env, jobject thiz, jobject context) {
+
+    if (gContext != nullptr) {
+        env->DeleteGlobalRef(gContext);
+    }
+
+    gContext = env->NewGlobalRef(context);
+
+    if (gNavigationEngineObj != nullptr) {
+        env->DeleteGlobalRef(gNavigationEngineObj);
+    }
+    gNavigationEngineObj = env->NewGlobalRef(thiz);
+
+    LOGI("Context set successfully");
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_navigation_NavigationEngine_loadOSMDataFromAssets(
+        JNIEnv* env, jobject
+
+, jstring assetFileName) {
+
+    try {
+        if (!gNavigationEngine) {
+            gNavigationEngine = std::make_unique<NavigationEngine>();
+        }
+
+        const char* fileNameChars = env->GetStringUTFChars(assetFileName, nullptr);
+        std::string fileName(fileNameChars ? fileNameChars : "");
+        env->ReleaseStringUTFChars(assetFileName, fileNameChars);
+
+        if (!gContext) {
+            LOGE("Context is not set. Call setContext first.");
+            jclass exClass = env->FindClass("java/lang/IllegalStateException");
+            env->ThrowNew(exClass, "Context is not set. Call setContext first.");
+            env->DeleteLocalRef(exClass);
+            return JNI_FALSE;
+        }
+
+        jclass contextClass = env->FindClass("android/content/Context");
+        if (!contextClass) {
+            LOGE("Failed to find Context class");
+            return JNI_FALSE;
+        }
+
+        jmethodID getAssetsMethod = env->GetMethodID(contextClass, "getAssets", "()Landroid/content/res/AssetManager;");
+        if (!getAssetsMethod) {
+            LOGE("Failed to find getAssets method");
+            env->DeleteLocalRef(contextClass);
+            return JNI_FALSE;
+        }
+
+        jobject assetManager = env->CallObjectMethod(gContext, getAssetsMethod);
+        if (!assetManager) {
+            LOGE("Failed to get AssetManager");
+            env->DeleteLocalRef(contextClass);
+            return JNI_FALSE;
+        }
+
+        AAssetManager* nativeAssetManager = AAssetManager_fromJava(env, assetManager);
+        if (!nativeAssetManager) {
+            LOGE("Failed to get native AssetManager");
+            env->DeleteLocalRef(assetManager);
+            env->DeleteLocalRef(contextClass);
+            return JNI_FALSE;
+        }
+
+        bool success = gNavigationEngine->loadOSMFromAssets(nativeAssetManager, fileName);
+
+        env->DeleteLocalRef(assetManager);
+        env->DeleteLocalRef(contextClass);
+
+        return static_cast<jboolean>(success);
+
+    } catch (const std::exception& e) {
+        LOGE("Error loading OSM data from assets: %s", e.what());
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, e.what());
+        env->DeleteLocalRef(exClass);
+        return JNI_FALSE;
+    } catch (...) {
+        LOGE("Unknown error loading OSM data from assets");
+        jclass exClass = env->FindClass("java/lang/RuntimeException");
+        env->ThrowNew(exClass, "Unknown error in native code");
+        env->DeleteLocalRef(exClass);
+        return JNI_FALSE;
+    }
+}
+

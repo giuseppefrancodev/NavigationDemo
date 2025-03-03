@@ -1,32 +1,36 @@
+/*
+ * File: NavigationRepository.kt
+ * Description: Repository class for handling location updates and providing location data to the app.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.domain.repository
 
 import android.location.Location as AndroidLocation
 import android.os.Looper
 import android.util.Log
 import com.example.navigation.domain.models.Location
+import com.example.navigation.interfaces.NavigationRepositoryInterface
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationAvailability
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.Priority
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import javax.inject.Inject
-import javax.inject.Singleton
 
 private const val TAG = "NavigationRepository"
 
 @Singleton
 class NavigationRepository @Inject constructor(
     private val fusedLocationClient: FusedLocationProviderClient
-) {
-    /**
-     * Provides location updates
-     */
-    fun getLocationUpdates(): Flow<Location> = callbackFlow {
-        // Create location request
+) : NavigationRepositoryInterface {
+    override fun getLocationUpdates(): Flow<Location> = callbackFlow {
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000)
             .setMinUpdateIntervalMillis(500)
             .setWaitForAccurateLocation(false)
@@ -37,8 +41,11 @@ class NavigationRepository @Inject constructor(
         val locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let {
-                    Log.d(TAG, "Location update: ${it.latitude}, ${it.longitude}, " +
-                            "acc: ${it.accuracy}")
+                    Log.d(
+                        TAG,
+                        "Location update: ${it.latitude}, ${it.longitude}, " +
+                            "acc: ${it.accuracy}"
+                    )
 
                     trySend(it.toLocation())
                 } ?: Log.w(TAG, "Received null location")
@@ -58,7 +65,6 @@ class NavigationRepository @Inject constructor(
                 Looper.getMainLooper()
             )
 
-            // Get last known location to speed things up
             fusedLocationClient.lastLocation.addOnSuccessListener { location ->
                 location?.let {
                     Log.d(TAG, "Last known location: ${it.latitude}, ${it.longitude}")

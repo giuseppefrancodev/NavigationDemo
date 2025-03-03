@@ -1,3 +1,10 @@
+/*
+ * File: DebugPanel.kt
+ * Description: Composable UI component for displaying debug controls and simulation options.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
@@ -31,9 +38,6 @@ import androidx.compose.ui.unit.dp
 import com.example.navigation.viewmodels.NavigationState
 import com.example.navigation.viewmodels.NavigationViewModel
 
-/**
- * Debug panel for showing navigation state and providing testing controls.
- */
 @Composable
 fun DebugPanel(
     state: NavigationState,
@@ -41,29 +45,24 @@ fun DebugPanel(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Create a state to track expansion - we'll start collapsed
     androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }.let { expansionState ->
         val isExpanded = expansionState.value
 
-        // Call our actual implementation with the conversion from old to new parameters
         ExpandableDebugPanel(
             state = state,
             viewModel = viewModel,
             isExpanded = isExpanded,
             onToggleExpanded = {
                 expansionState.value = !expansionState.value
-                // Also call onClose when collapsing to maintain compatibility
+
                 if (!expansionState.value) onClose()
             },
             modifier = modifier
+                .padding(top = 30.dp)
         )
     }
 }
 
-/**
- * Animated unified Debug Panel that expands to show simulation controls.
- * This is the actual implementation with the new parameters.
- */
 @Composable
 private fun ExpandableDebugPanel(
     state: NavigationState,
@@ -74,13 +73,11 @@ private fun ExpandableDebugPanel(
 ) {
     val isDemoMode by viewModel.isDemoMode.collectAsState()
 
-    // Animation for rotating the info icon
     val iconRotation by animateFloatAsState(
         targetValue = if (isExpanded) 45f else 0f,
         label = "iconRotation"
     )
 
-    // Base surface that holds everything
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
@@ -93,7 +90,6 @@ private fun ExpandableDebugPanel(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(4.dp)
         ) {
-            // Use FloatingActionButton instead of Button for more reliable icon display
             FloatingActionButton(
                 onClick = onToggleExpanded,
                 modifier = Modifier.size(40.dp),
@@ -103,11 +99,10 @@ private fun ExpandableDebugPanel(
                     imageVector = Icons.Filled.Info,
                     contentDescription = "Debug Controls",
                     modifier = Modifier.rotate(iconRotation),
-                    tint = Color.White // Force white color for better visibility
+                    tint = Color.White
                 )
             }
 
-            // Expandable section with buttons
             AnimatedVisibility(
                 visible = isExpanded,
                 enter = expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
@@ -117,7 +112,6 @@ private fun ExpandableDebugPanel(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Simulation button
                     Button(
                         onClick = {
                             if (isDemoMode) {
@@ -128,10 +122,11 @@ private fun ExpandableDebugPanel(
                         },
                         enabled = isDemoMode || state.currentRoute != null,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDemoMode)
+                            containerColor = if (isDemoMode) {
                                 MaterialTheme.colorScheme.error
-                            else
+                            } else {
                                 MaterialTheme.colorScheme.primary
+                            }
                         ),
                         shape = RoundedCornerShape(20.dp),
                         modifier = Modifier.size(width = 110.dp, height = 36.dp)
@@ -139,17 +134,14 @@ private fun ExpandableDebugPanel(
                         Text(if (isDemoMode) "Stop Sim" else "Start Sim")
                     }
 
-                    // Reset button
                     Button(
                         onClick = {
-                            // Stop any ongoing navigation or simulation
                             if (isDemoMode) {
                                 viewModel.stopSimulation()
                             } else if (state.isNavigating) {
                                 viewModel.stopNavigation()
                             }
 
-                            // Clear destination if any was set
                             if (state.destination != null) {
                                 viewModel.clearDestination()
                             }

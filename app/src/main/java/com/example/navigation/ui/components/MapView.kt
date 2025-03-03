@@ -1,3 +1,10 @@
+/*
+ * File: MapView.kt
+ * Description: Composable component for displaying a map with navigation routes, markers, and location tracking.
+ * Author: Giuseppe Franco
+ * Created: March 2025
+ */
+
 package com.example.navigation.ui.components
 
 import android.content.Context
@@ -6,13 +13,17 @@ import android.graphics.Canvas
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.navigation.R
 import com.example.navigation.domain.models.Location
@@ -43,24 +54,20 @@ fun MapView(
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // State for map loading
     var isMapLoaded by remember { mutableStateOf(false) }
 
-    // State for map initialization
     var isMapInitialized by remember { mutableStateOf(false) }
 
-    // State for car icon
     var carIconBitmap by remember { mutableStateOf<BitmapDescriptor?>(null) }
 
-    // Keep track of whether we've shown the initial route
+    var fixedCarNavigationMode by remember { mutableStateOf(isDemoMode && followCurrentLocation) }
+
     val initialRouteShown = remember { mutableStateOf(false) }
 
-    // Initialize Maps before rendering
     LaunchedEffect(Unit) {
         try {
-            // Initialize Maps engine
             MapsInitializer.initialize(context)
-            // Wait a moment for complete initialization
+
             Handler(Looper.getMainLooper()).postDelayed({
                 isMapInitialized = true
             }, 500)
@@ -69,11 +76,9 @@ fun MapView(
         }
     }
 
-    // Create car icon once map is initialized
     LaunchedEffect(isMapInitialized) {
         if (isMapInitialized) {
             try {
-                // Convert drawable to bitmap descriptor
                 carIconBitmap = getBitmapDescriptorFromVector(context, R.drawable.ic_car_marker)
                 Log.d("MapView", "Car icon created successfully")
             } catch (e: Exception) {
@@ -82,61 +87,46 @@ fun MapView(
         }
     }
 
-    // --- One-time effect to show the entire route initially ---
-    LaunchedEffect(Unit) {
-        if (isDemoMode && currentLocation != null && destination != null && !initialRouteShown.value) {
+    LaunchedEffect(currentRoute) {
+        if (!initialRouteShown.value && currentRoute != null && currentRoute.points.size > 1) {
             coroutineScope.launch {
                 try {
-                    // Build bounds to show from currentLocation to destination (and any route points)
                     val boundsBuilder = LatLngBounds.builder()
-                        .include(LatLng(currentLocation.latitude, currentLocation.longitude))
-                        .include(LatLng(destination.latitude, destination.longitude))
 
-                    if (currentRoute?.points?.isNotEmpty() == true) {
-                        currentRoute.points.forEach { point ->
-                            boundsBuilder.include(LatLng(point.latitude, point.longitude))
-                        }
+                    currentRoute.points.forEach { point ->
+                        boundsBuilder.include(LatLng(point.latitude, point.longitude))
+                    }
+
+                    destination?.let {
+                        boundsBuilder.include(LatLng(it.latitude, it.longitude))
                     }
 
                     val bounds = boundsBuilder.build()
 
-                    // Animate to show the entire route
                     cameraPositionState.animate(
                         update = CameraUpdateFactory.newLatLngBounds(bounds, 100),
                         durationMs = 1000
                     )
+
+                    initialRouteShown.value = true
                 } catch (e: Exception) {
-                    // If building bounds fails, fallback to current location
-                    val fallbackPosition = CameraPosition.Builder()
-                        .target(LatLng(currentLocation.latitude, currentLocation.longitude))
-                        .zoom(15f)
-                        .build()
-                    cameraPositionState.animate(
-                        update = CameraUpdateFactory.newCameraPosition(fallbackPosition),
-                        durationMs = 500
-                    )
-                } finally {
-                    // Mark the initial route as shown
+                    Log.e("MapView", "Error showing initial route", e)
                     initialRouteShown.value = true
                 }
             }
-        } else {
-            // If not demo mode or missing data, we can consider it 'shown' by default
-            initialRouteShown.value = true
         }
     }
 
-    // --- Follow current location once the initial route is shown ---
-    LaunchedEffect(currentLocation, isDemoMode, followCurrentLocation, initialRouteShown.value) {
-        // If we are in demo mode, have a current location, want to follow it,
-        // and the initial route has been shown, then animate to current location.
-        if (isDemoMode && followCurrentLocation && currentLocation != null && initialRouteShown.value) {
+    LaunchedEffect(currentLocation, isDemoMode, followCurrentLocation) {
+        if (currentLocation != null && isDemoMode && followCurrentLocation) {
+            fixedCarNavigationMode = true
+
             coroutineScope.launch {
                 val position = CameraPosition.Builder()
                     .target(LatLng(currentLocation.latitude, currentLocation.longitude))
-                    .zoom(17f)
+                    .zoom(18f)
                     .bearing(currentLocation.bearing)
-                    .tilt(45f)
+                    .tilt(60f)
                     .build()
 
                 cameraPositionState.animate(
@@ -144,43 +134,59 @@ fun MapView(
                     durationMs = 500
                 )
             }
+        } else {
+            fixedCarNavigationMode = false
         }
     }
 
-    // Show map with loading indicator until initialized
     Box(modifier = modifier) {
         GoogleMap(
             modifier = Modifier.matchParentSize(),
             cameraPositionState = cameraPositionState,
             onMapLongClick = if (!isDemoMode) onMapLongClick else { _ -> },
             uiSettings = MapUiSettings(
-                zoomControlsEnabled = !isDemoMode,
-                scrollGesturesEnabled = !isDemoMode,
-                zoomGesturesEnabled = !isDemoMode
+                zoomControlsEnabled = !fixedCarNavigationMode,
+                scrollGesturesEnabled = !fixedCarNavigationMode,
+                zoomGesturesEnabled = !fixedCarNavigationMode,
+                rotationGesturesEnabled = !fixedCarNavigationMode,
+                tiltGesturesEnabled = !fixedCarNavigationMode,
+                compassEnabled = !fixedCarNavigationMode
             ),
             onMapLoaded = {
                 isMapLoaded = true
             }
         ) {
-            // Only draw markers and routes when map is loaded
             if (isMapLoaded) {
-                // Draw current location marker with car icon
                 currentLocation?.let { location ->
                     val position = LatLng(location.latitude, location.longitude)
 
-                    Marker(
-                        state = MarkerState(position),
-                        title = "Current Location",
-                        // Use car icon if available, or fall back to blue marker
-                        icon = carIconBitmap ?: BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE),
-                        rotation = location.bearing,
-                        anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
-                        flat = true,
-                        zIndex = 1f
-                    )
+                    if (fixedCarNavigationMode) {
+                        Marker(
+                            state = MarkerState(position),
+                            title = "Current Location",
+                            icon = carIconBitmap ?: BitmapDescriptorFactory.defaultMarker(
+                                BitmapDescriptorFactory.HUE_AZURE
+                            ),
+                            rotation = 0f,
+                            anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                            flat = true,
+                            zIndex = 1f
+                        )
+                    } else {
+                        Marker(
+                            state = MarkerState(position),
+                            title = "Current Location",
+                            icon = carIconBitmap ?: BitmapDescriptorFactory.defaultMarker(
+                                BitmapDescriptorFactory.HUE_AZURE
+                            ),
+                            rotation = location.bearing,
+                            anchor = androidx.compose.ui.geometry.Offset(0.5f, 0.5f),
+                            flat = true,
+                            zIndex = 1f
+                        )
+                    }
                 }
 
-                // Draw destination marker
                 destination?.let { location ->
                     val position = LatLng(location.latitude, location.longitude)
                     Marker(
@@ -189,43 +195,76 @@ fun MapView(
                     )
                 }
 
-                // Draw route path
                 currentRoute?.let { route ->
                     if (route.points.isNotEmpty()) {
                         val routePoints = route.points.map { LatLng(it.latitude, it.longitude) }
+
                         Polyline(
                             points = routePoints,
                             color = Color.Blue,
-                            width = 5f,
+                            width = 8f,
                             jointType = JointType.ROUND,
                             startCap = com.google.android.gms.maps.model.RoundCap(),
-                            endCap = com.google.android.gms.maps.model.RoundCap()
+                            endCap = com.google.android.gms.maps.model.RoundCap(),
+                            zIndex = 1f,
+                            geodesic = true
                         )
-                    } else if (currentLocation != null && destination != null) {
+
                         Polyline(
-                            points = listOf(
-                                LatLng(currentLocation.latitude, currentLocation.longitude),
-                                LatLng(destination.latitude, destination.longitude)
-                            ),
-                            color = Color.Blue,
-                            width = 5f,
-                            jointType = JointType.ROUND
+                            points = routePoints,
+                            color = Color.Cyan.copy(alpha = 0.3f),
+                            width = 16f,
+                            jointType = JointType.ROUND,
+                            startCap = com.google.android.gms.maps.model.RoundCap(),
+                            endCap = com.google.android.gms.maps.model.RoundCap(),
+                            zIndex = 0f
                         )
+                    }
+                }
+
+                if (!fixedCarNavigationMode && alternativeRoutes.size > 1) {
+                    for (i in 1 until alternativeRoutes.size) {
+                        val altRoute = alternativeRoutes[i]
+                        if (altRoute.points.isNotEmpty()) {
+                            val altRoutePoints = altRoute.points.map { LatLng(it.latitude, it.longitude) }
+
+                            Polyline(
+                                points = altRoutePoints,
+                                color = Color.Gray,
+                                width = 5f,
+                                jointType = JointType.ROUND,
+                                pattern = listOf(
+                                    com.google.android.gms.maps.model.Dash(20f),
+                                    com.google.android.gms.maps.model.Gap(10f)
+                                ),
+                                zIndex = 0f
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Show loading indicator while map is initializing
         if (!isMapLoaded) {
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center)
             )
         }
+
+        if (fixedCarNavigationMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(10.dp)
+                    .background(
+                        color = Color.Blue,
+                        shape = CircleShape
+                    )
+            )
+        }
     }
 }
 
-// Helper function to convert vector drawable to bitmap descriptor
 private fun getBitmapDescriptorFromVector(context: Context, drawableId: Int): BitmapDescriptor? {
     return try {
         val drawable = ContextCompat.getDrawable(context, drawableId) ?: return null
